@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🏠 Orin Home Hub</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --accent: #0f3460;
+    --highlight: #e94560;
+    --text: #eee;
+    --muted: #999;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+  }
+  header {
+    background: var(--card);
+    padding: 1rem 1.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    border-bottom: 2px solid var(--highlight);
+  }
+  header h1 { font-size: 1.4rem; }
+  .container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 1rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1rem;
+  }
+  @media (max-width: 768px) {
+    .container { grid-template-columns: 1fr; }
+  }
+  .card {
+    background: var(--card);
+    border-radius: 12px;
+    padding: 1rem;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  }
+  .card h2 {
+    font-size: 1.1rem;
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  /* Camera */
+  .camera-feed {
+    width: 100%;
+    border-radius: 8px;
+    background: #000;
+    min-height: 240px;
+    object-fit: contain;
+  }
+  /* Push to talk */
+  .ptt-btn {
+    width: 100%;
+    padding: 1.5rem;
+    font-size: 1.3rem;
+    font-weight: bold;
+    border: 3px solid var(--highlight);
+    border-radius: 16px;
+    background: var(--accent);
+    color: var(--text);
+    cursor: grab;
+    user-select: none;
+    transition: all 0.15s;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .ptt-btn:active, .ptt-btn.recording {
+    background: var(--highlight);
+    transform: scale(0.97);
+    box-shadow: 0 0 20px rgba(233,69,96,0.5);
+  }
+  .ptt-btn.recording { cursor: grabbing; }
+  .status-bar {
+    margin-top: 0.75rem;
+    padding: 0.5rem;
+    border-radius: 8px;
+    background: var(--accent);
+    text-align: center;
+    font-size: 0.85rem;
+    min-height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .status-bar.speaking {
+    background: var(--highlight);
+    animation: pulse 1s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.7; }
+  }
+  /* Sonos info */
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.9rem;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-label { color: var(--muted); }
+  .volume-slider {
+    width: 100%;
+    margin: 0.5rem 0;
+    accent-color: var(--highlight);
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    background: #4a4;
+  }
+  .status-dot.off { background: #a44; }
+  footer {
+    text-align: center;
+    padding: 1rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.6rem">🏠</span>
+  <h1>Orin Home Hub</h1>
+</header>
+
+<div class="container">
+  <!-- Camera -->
+  <div class="card">
+    <h2>
+      <span class="status-dot" id="camDot"></span>
+      📷 USB Camera
+    </h2>
+    <img class="camera-feed" id="camFeed" src="/stream" alt="Camera stream"
+         onerror="this.alt='Camera offline'; document.getElementById('camDot').className='status-dot off'"
+         onload="document.getElementById('camDot').className='status-dot'">
+  </div>
+
+  <!-- Push to Talk -->
+  <div class="card">
+    <h2>🎤 Sonos — Push to Talk</h2>
+    <button class="ptt-btn" id="pttBtn"
+            onmousedown="startRecording()" onmouseup="stopRecording()"
+            ontouchstart="startRecording()" ontouchend="stopRecording()">
+      🎙️ Hold to Speak
+    </button>
+    <div class="status-bar" id="pttStatus">Ready</div>
+  </div>
+
+  <!-- Sonos Info -->
+  <div class="card">
+    <h2>🔊 Sonos Speaker</h2>
+    <div class="info-row">
+      <span class="info-label">Name</span>
+      <span id="sonosName">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Status</span>
+      <span id="sonosStatus">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Volume</span>
+      <span id="sonosVolLabel">—</span>
+    </div>
+    <input type="range" class="volume-slider" id="volumeSlider"
+           min="0" max="100" value="50"
+           oninput="setVolume(this.value)">
+  </div>
+
+  <!-- System Status -->
+  <div class="card">
+    <h2>⚙️ System</h2>
+    <div class="info-row">
+      <span class="info-label">Camera</span>
+      <span id="sysCamera">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Resolution</span>
+      <span id="sysRes">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Server</span>
+      <span>{{ host }}:{{ port }}</span>
+    </div>
+  </div>
+</div>
+
+<footer>
+  Orin Home Hub &middot; Running on Jetson Orin
+</footer>
+
+<script>
+// ── Push to Talk ─────────────────────────────────────────────────
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+
+async function startRecording() {
+  if (isRecording) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Prefer a format Sonos handles well: WAV, 44100 Hz mono
+    // We'll record as webm/ogg and convert to WAV on the server
+    const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? { mimeType: 'audio/webm;codecs=opus' }
+      : {};
+
+    mediaRecorder = new MediaRecorder(stream, options);
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
+
+    mediaRecorder.start();
+    isRecording = true;
+
+    document.getElementById('pttBtn').classList.add('recording');
+    document.getElementById('pttBtn').textContent = '🔴 Recording...';
+    document.getElementById('pttStatus').textContent = '🎙️ Recording — release to send';
+  } catch (err) {
+    document.getElementById('pttStatus').textContent = '❌ Mic access denied';
+    console.error(err);
+  }
+}
+
+async function stopRecording() {
+  if (!isRecording || !mediaRecorder) return;
+
+  return new Promise(resolve => {
+    mediaRecorder.onstop = async () => {
+      // Stop all tracks to release mic
+      mediaRecorder.stream.getTracks().forEach(t => t.stop());
+
+      const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+
+      // Send to server
+      document.getElementById('pttStatus').className = 'status-bar speaking';
+      document.getElementById('pttStatus').textContent = '⏳ Sending to Sonos...';
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', blob, 'voice.wav');
+
+        const resp = await fetch('/api/audio/play', {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await resp.json();
+
+        if (data.status === 'playing') {
+          document.getElementById('pttStatus').textContent =
+            `🔊 Playing on ${data.sonos}`;
+        } else {
+          document.getElementById('pttStatus').textContent =
+            `❌ ${data.error}`;
+        }
+      } catch (err) {
+        document.getElementById('pttStatus').textContent = '❌ Send failed';
+      }
+
+      document.getElementById('pttStatus').className = 'status-bar';
+      setTimeout(() => {
+        document.getElementById('pttStatus').textContent = 'Ready';
+      }, 3000);
+
+      isRecording = false;
+      document.getElementById('pttBtn').classList.remove('recording');
+      document.getElementById('pttBtn').textContent = '🎙️ Hold to Speak';
+      resolve();
+    };
+
+    mediaRecorder.stop();
+  });
+}
+
+// ── Volume ───────────────────────────────────────────────────────
+async function setVolume(val) {
+  try {
+    const resp = await fetch('/api/sonos/volume', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ volume: parseInt(val) }),
+    });
+    const data = await resp.json();
+    document.getElementById('sonosVolLabel').textContent = `${data.volume}%`;
+  } catch (err) {
+    console.error('Volume error:', err);
+  }
+}
+
+// ── Load initial status ──────────────────────────────────────────
+(async () => {
+  try {
+    const resp = await fetch('/api/status');
+    const data = await resp.json();
+
+    // System info
+    if (data.camera) {
+      document.getElementById('sysCamera').textContent = data.camera.device.split('/').pop();
+      document.getElementById('sysRes').textContent =
+        `${data.camera.resolution} @ ${data.camera.fps}fps`;
+    }
+
+    // Sonos info
+    if (data.sonos && !data.sonos.error) {
+      document.getElementById('sonosName').textContent = data.sonos.name;
+      document.getElementById('sonosStatus').textContent = data.sonos.status;
+      document.getElementById('sonosVolLabel').textContent = `${data.sonos.volume}%`;
+      document.getElementById('volumeSlider').value = data.sonos.volume;
+    } else {
+      document.getElementById('sonosName').textContent = data.sonos?.error || 'Not found';
+    }
+  } catch (err) {
+    console.error('Status load error:', err);
+  }
+})();
+</script>
+
+</body>
+</html>
