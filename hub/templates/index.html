@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🏠 Orin Home Hub</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
 <style>
   :root {
     --bg: #1a1a2e;
@@ -125,6 +126,14 @@
     background: #4a4;
   }
   .status-dot.off { background: #a44; }
+  /* Conference audio */
+  .conf-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0 0.75rem;
+    font-size: 0.95rem;
+  }
   footer {
     text-align: center;
     padding: 1rem;
@@ -152,8 +161,35 @@
          onload="document.getElementById('camDot').className='status-dot'">
   </div>
 
-  <!-- Push to Talk -->
+  <!-- Conference Audio (replaces Sonos push-to-talk for Task 1) -->
   <div class="card">
+    <h2>🎙️ Conference Audio</h2>
+    <div class="conf-status">
+      <span class="status-dot off" id="confDot"></span>
+      <span id="confText">Connecting…</span>
+    </div>
+    <div id="audioEnableRow" style="margin-top:0.5rem">
+      <button class="ptt-btn" id="enableAudioBtn" onclick="enableAudio()"
+              style="padding:0.75rem; font-size:1rem; text-transform:none; letter-spacing:0; cursor:pointer">
+        🔊 Enable Audio
+      </button>
+    </div>
+    <div id="httpsWarning" style="display:none; margin-top:0.5rem; padding:0.5rem;
+         background:rgba(233,69,96,0.15); border-radius:8px; font-size:0.85rem; text-align:center">
+      🔒 Mic requires HTTPS — <a id="httpsLink" href="#" style="color:#e94560">open secure page</a>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Browser mic → USB speaker</span>
+      <span id="txStatus">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">USB mic → browser speaker</span>
+      <span id="rxStatus">—</span>
+    </div>
+  </div>
+
+  <!-- Sonos push-to-talk — disabled in Task 1, preserved for future use -->
+  <div class="card" style="display:none" id="sonosPttCard">
     <h2>🎤 Sonos — Push to Talk</h2>
     <button class="ptt-btn" id="pttBtn"
             onmousedown="startRecording()" onmouseup="stopRecording()"
@@ -163,8 +199,8 @@
     <div class="status-bar" id="pttStatus">Ready</div>
   </div>
 
-  <!-- Sonos Info -->
-  <div class="card">
+  <!-- Sonos Info — disabled in Task 1, preserved for future use -->
+  <div class="card" style="display:none" id="sonosInfoCard">
     <h2>🔊 Sonos Speaker</h2>
     <div class="info-row">
       <span class="info-label">Name</span>
@@ -206,7 +242,120 @@
 </footer>
 
 <script>
-// ── Push to Talk ─────────────────────────────────────────────────
+// ── Conference Audio (two-way via USB speakerphone + Socket.IO) ──
+const CONF_SAMPLE_RATE = 16000;
+const CONF_CHUNK = 1024;
+
+let audioCtx = null;
+let nextPlayTime = 0;
+
+const socket = io();
+
+socket.on('connect', () => {
+  document.getElementById('confDot').className = 'status-dot';
+  document.getElementById('confText').textContent = 'Connected — press Enable Audio';
+});
+
+socket.on('disconnect', () => {
+  document.getElementById('confDot').className = 'status-dot off';
+  document.getElementById('confText').textContent = 'Disconnected';
+});
+
+// Receive USB mic audio → play through browser speaker
+socket.on('audio_chunk', (data) => {
+  if (!audioCtx || audioCtx.state === 'suspended') return;
+  const bytes = data instanceof ArrayBuffer ? data : data.buffer;
+  const int16 = new Int16Array(bytes);
+  const float32 = new Float32Array(int16.length);
+  for (let i = 0; i < int16.length; i++) {
+    float32[i] = int16[i] / 32768.0;
+  }
+  const buf = audioCtx.createBuffer(1, float32.length, CONF_SAMPLE_RATE);
+  buf.copyToChannel(float32, 0);
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  const now = audioCtx.currentTime;
+  const t = Math.max(now, nextPlayTime);
+  src.start(t);
+  nextPlayTime = t + buf.duration;
+  document.getElementById('rxStatus').textContent = '● live';
+});
+
+async function enableAudio() {
+  const btn = document.getElementById('enableAudioBtn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Starting…';
+
+  // AudioContext must be created/resumed inside a user gesture
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+      sampleRate: CONF_SAMPLE_RATE,
+    });
+  }
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  document.getElementById('rxStatus').textContent = '⏳ waiting…';
+
+  if (!window.isSecureContext) {
+    const host = location.hostname;
+    document.getElementById('httpsLink').href = `https://${host}:{{ https_port }}`;
+    document.getElementById('httpsWarning').style.display = '';
+    document.getElementById('confText').textContent = 'HTTP — RX ready, mic needs HTTPS';
+    document.getElementById('txStatus').textContent = '✗ HTTPS needed';
+    btn.textContent = '✓ RX Enabled';
+    return;
+  }
+
+  await startConference();
+}
+
+async function startConference() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        sampleRate: CONF_SAMPLE_RATE,
+      },
+    });
+
+    // AudioContext is already running (created in enableAudio)
+
+    const source = audioCtx.createMediaStreamSource(stream);
+
+    // ScriptProcessorNode — deprecated but universally supported
+    // (AudioWorklet alternative can be added in a later task)
+    const processor = audioCtx.createScriptProcessor(CONF_CHUNK, 1, 1);
+    const silencer = audioCtx.createGain();
+    silencer.gain.value = 0;  // prevents local echo
+
+    processor.onaudioprocess = (e) => {
+      const float32 = e.inputBuffer.getChannelData(0);
+      const int16 = new Int16Array(float32.length);
+      for (let i = 0; i < float32.length; i++) {
+        int16[i] = Math.max(-32768, Math.min(32767, float32[i] * 32768));
+      }
+      socket.emit('browser_audio', int16.buffer);
+    };
+
+    source.connect(processor);
+    processor.connect(silencer);
+    silencer.connect(audioCtx.destination);
+
+    document.getElementById('txStatus').textContent = '● live';
+    document.getElementById('confText').textContent = 'Active';
+    document.getElementById('confDot').className = 'status-dot';
+    document.getElementById('enableAudioBtn').textContent = '✓ Audio Active';
+  } catch (err) {
+    document.getElementById('confText').textContent = `Mic error: ${err.message}`;
+    document.getElementById('txStatus').textContent = '✗ mic denied';
+    document.getElementById('enableAudioBtn').disabled = false;
+    document.getElementById('enableAudioBtn').textContent = '🔊 Enable Audio';
+    console.error('Conference audio error:', err);
+  }
+}
+
+// ── Sonos push-to-talk (disabled — preserved for future use) ─────
 let mediaRecorder = null;
 let audioChunks = [];
 let isRecording = false;
@@ -215,20 +364,14 @@ async function startRecording() {
   if (isRecording) return;
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    // Prefer a format Sonos handles well: WAV, 44100 Hz mono
-    // We'll record as webm/ogg and convert to WAV on the server
     const options = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
       ? { mimeType: 'audio/webm;codecs=opus' }
       : {};
-
     mediaRecorder = new MediaRecorder(stream, options);
     audioChunks = [];
-
     mediaRecorder.ondataavailable = e => audioChunks.push(e.data);
-
     mediaRecorder.start();
     isRecording = true;
-
     document.getElementById('pttBtn').classList.add('recording');
     document.getElementById('pttBtn').textContent = '🔴 Recording...';
     document.getElementById('pttStatus').textContent = '🎙️ Recording — release to send';
@@ -240,55 +383,34 @@ async function startRecording() {
 
 async function stopRecording() {
   if (!isRecording || !mediaRecorder) return;
-
   return new Promise(resolve => {
     mediaRecorder.onstop = async () => {
-      // Stop all tracks to release mic
       mediaRecorder.stream.getTracks().forEach(t => t.stop());
-
       const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
-
-      // Send to server
       document.getElementById('pttStatus').className = 'status-bar speaking';
       document.getElementById('pttStatus').textContent = '⏳ Sending to Sonos...';
-
       try {
         const formData = new FormData();
         formData.append('audio', blob, 'voice.wav');
-
-        const resp = await fetch('/api/audio/play', {
-          method: 'POST',
-          body: formData,
-        });
+        const resp = await fetch('/api/audio/play', { method: 'POST', body: formData });
         const data = await resp.json();
-
-        if (data.status === 'playing') {
-          document.getElementById('pttStatus').textContent =
-            `🔊 Playing on ${data.sonos}`;
-        } else {
-          document.getElementById('pttStatus').textContent =
-            `❌ ${data.error}`;
-        }
+        document.getElementById('pttStatus').textContent =
+          data.status === 'playing' ? `🔊 Playing on ${data.sonos}` : `❌ ${data.error}`;
       } catch (err) {
         document.getElementById('pttStatus').textContent = '❌ Send failed';
       }
-
       document.getElementById('pttStatus').className = 'status-bar';
-      setTimeout(() => {
-        document.getElementById('pttStatus').textContent = 'Ready';
-      }, 3000);
-
+      setTimeout(() => { document.getElementById('pttStatus').textContent = 'Ready'; }, 3000);
       isRecording = false;
       document.getElementById('pttBtn').classList.remove('recording');
       document.getElementById('pttBtn').textContent = '🎙️ Hold to Speak';
       resolve();
     };
-
     mediaRecorder.stop();
   });
 }
 
-// ── Volume ───────────────────────────────────────────────────────
+// ── Volume (Sonos — preserved for future use) ────────────────────
 async function setVolume(val) {
   try {
     const resp = await fetch('/api/sonos/volume', {
@@ -308,15 +430,12 @@ async function setVolume(val) {
   try {
     const resp = await fetch('/api/status');
     const data = await resp.json();
-
-    // System info
     if (data.camera) {
       document.getElementById('sysCamera').textContent = data.camera.device.split('/').pop();
       document.getElementById('sysRes').textContent =
         `${data.camera.resolution} @ ${data.camera.fps}fps`;
     }
-
-    // Sonos info
+    // Sonos status elements are hidden but still in DOM — safe to update
     if (data.sonos && !data.sonos.error) {
       document.getElementById('sonosName').textContent = data.sonos.name;
       document.getElementById('sonosStatus').textContent = data.sonos.status;
@@ -330,6 +449,7 @@ async function setVolume(val) {
   }
 })();
 </script>
+
 
 </body>
 </html>
