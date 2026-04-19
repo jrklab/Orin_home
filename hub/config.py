@@ -27,7 +27,9 @@ AUDIO_OUT_CHUNK  = AUDIO_CHUNK * (AUDIO_OUT_RATE // AUDIO_IN_RATE)  # 3072
 # ── Sonos ─────────────────────────────────────────────────────────────
 SONOS_ENABLED   = True    # re-enabled for Task 2 (Sonos page)
 SONOS_CACHE_TTL = 60.0    # seconds between soco.discover() calls
-
+# ── Discord (Task 3) ─────────────────────────────────────
+# Set DISCORD_WEBHOOK_URL in the .env file (never hard-code).
+DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 # ── TLS ──────────────────────────────────────────────────────────────
 _HUB_DIR  = Path(__file__).parent
 CERT_FILE = _HUB_DIR / "cert.pem"

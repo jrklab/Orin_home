@@ -26,6 +26,7 @@ from flask import Flask
 
 import audio
 import camera
+import assistant
 from config import CERT_FILE, HOST, HTTPS_PORT, KEY_FILE, PORT, USB_AUDIO_DEVICE, AUDIO_IN_RATE
 from extensions import socketio
 
@@ -78,6 +79,7 @@ if __name__ == "__main__":
 
     camera.start()
     audio.start()
+    assistant.start()
     threading.Thread(target=_start_https_server, daemon=True).start()
     socketio.run(app, host=HOST, port=PORT, allow_unsafe_werkzeug=True)
 

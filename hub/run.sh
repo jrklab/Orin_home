@@ -17,6 +17,21 @@ HTTPS_PORT=5443
 HUB_DIR="$(cd "$(dirname "$0")" && pwd)"
 PIDFILE="$HUB_DIR/.hub.pid"
 
+# ── Load .env if present ─────────────────────────────────────────────
+# Create hub/.env with lines like: DISCORD_WEBHOOK_URL=https://...
+if [ -f "$HUB_DIR/.env" ]; then
+    set -a   # auto-export all variables
+    # shellcheck disable=SC1090
+    source "$HUB_DIR/.env"
+    set +a
+fi
+
+# ── CUDA library path (for NVIDIA PyTorch Jetson wheel) ──────────────
+_CUSPARSELT_DIR="$HOME/.local/lib/python3.10/site-packages/nvidia/cusparselt/lib"
+if [ -d "$_CUSPARSELT_DIR" ]; then
+    export LD_LIBRARY_PATH="${_CUSPARSELT_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 echo "🏠  Orin Home Hub"
 
 # ── 0. Kill old instance ─────────────────────────────────────────────

@@ -28,16 +28,45 @@ except (ImportError, OSError):
 _mic_queue: queue.Queue = queue.Queue(maxsize=20)
 speaker_queue: queue.Queue = queue.Queue(maxsize=20)   # public — routes write here
 
+# ── Mic subscriber fan-out (same pattern as camera frames) ───────────
+_mic_subscribers_lock = threading.Lock()
+_mic_subscribers: list[queue.Queue] = []
+
+
+def mic_subscribe() -> queue.Queue:
+    """Return a new queue that receives every raw mic chunk."""
+    q: queue.Queue = queue.Queue(maxsize=50)
+    with _mic_subscribers_lock:
+        _mic_subscribers.append(q)
+    return q
+
+
+def mic_unsubscribe(q: queue.Queue) -> None:
+    with _mic_subscribers_lock:
+        try:
+            _mic_subscribers.remove(q)
+        except ValueError:
+            pass
+
+
 _audio_lock = threading.Lock()
 _mic_stream = None
 _speaker_stream = None
 
 
 def _audio_input_callback(indata, frames, time_info, status) -> None:
+    raw = bytes(indata)
     try:
-        _mic_queue.put_nowait(bytes(indata))
+        _mic_queue.put_nowait(raw)
     except queue.Full:
         pass
+    # Fan-out to all extra subscribers (e.g. assistant wake-word listener)
+    with _mic_subscribers_lock:
+        for q in list(_mic_subscribers):
+            try:
+                q.put_nowait(raw)
+            except queue.Full:
+                pass
 
 
 def _audio_output_callback(outdata, frames, time_info, status) -> None:
@@ -97,6 +126,26 @@ def start() -> None:
         except Exception as e:
             print(f"    Speaker stream error: {e}", flush=True)
     threading.Thread(target=_mic_broadcast_thread, daemon=True).start()
+
+
+def play_wav(path: str) -> None:
+    """Enqueue a WAV file (48 kHz int16 mono) onto the speaker output queue."""
+    import wave
+    import numpy as np
+    try:
+        with wave.open(path, 'r') as wf:
+            raw = wf.readframes(wf.getnframes())
+        arr = np.frombuffer(raw, dtype=np.int16)
+        # Feed in AUDIO_OUT_CHUNK-sized pieces so the callback drains cleanly
+        size = AUDIO_OUT_CHUNK
+        for i in range(0, len(arr), size):
+            chunk = arr[i:i + size].tobytes()
+            try:
+                speaker_queue.put(chunk, timeout=2)
+            except queue.Full:
+                break
+    except Exception as e:
+        print(f"    play_wav error: {e}", flush=True)
 
 
 def stop() -> None:

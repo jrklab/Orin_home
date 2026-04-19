@@ -17,3 +17,4 @@ hub/audio_cache/
 
 # OS
 .DS_Store
+hub/.env
